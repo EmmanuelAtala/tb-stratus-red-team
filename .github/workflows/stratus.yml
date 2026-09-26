@@ -25,6 +25,12 @@ jobs:
   stratus:
     runs-on: ubuntu-latest
     steps:
+      - name: Debug OIDC token claims
+        run: |
+          curl -sSL "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" | \
+            jq -r '.value' | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -39,13 +45,11 @@ jobs:
       - name: Warm up, detonate, and clean up
         run: |
           set -euo pipefail
-
           if [ "${{ inputs.technique }}" = "all" ]; then
             TECHNIQUES=$(stratus list | grep 'aws\.' | awk '{print $2}')
           else
             TECHNIQUES="${{ inputs.technique }}"
           fi
-
           for t in $TECHNIQUES; do
             echo "=== $t ==="
             stratus warmup "$t"
