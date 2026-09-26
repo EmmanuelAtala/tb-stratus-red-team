@@ -10,6 +10,7 @@ on:
         default: 'all'
         options:
           - all
+          - from-file
           - aws.defense-evasion.cloudtrail-stop
           - aws.defense-evasion.cloudtrail-delete
           - aws.credential-access.ec2-steal-instance-credentials
@@ -25,6 +26,9 @@ jobs:
   stratus:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Debug OIDC token claims
         run: |
           curl -sSL "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
@@ -48,8 +52,16 @@ jobs:
       - name: Warm up, detonate, and clean up
         run: |
           set -euo pipefail
+
           if [ "${{ inputs.technique }}" = "all" ]; then
             TECHNIQUES=$(stratus list | grep 'aws\.' | awk '{print $2}')
+          elif [ "${{ inputs.technique }}" = "from-file" ]; then
+            if [ ! -f techniques.txt ]; then
+              echo "techniques.txt not found in repo root" >&2
+              exit 1
+            fi
+            # strip comments (#...) and blank lines
+            TECHNIQUES=$(grep -v '^\s*#' techniques.txt | grep -v '^\s*$')
           else
             TECHNIQUES="${{ inputs.technique }}"
           fi
@@ -59,3 +71,4 @@ jobs:
             stratus detonate "$t"
             stratus cleanup "$t"
           done
+
