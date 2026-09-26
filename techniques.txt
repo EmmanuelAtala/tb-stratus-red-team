@@ -1,0 +1,19 @@
+# One technique ID per line. Lines starting with # are ignored, as are blank lines.
+# Run `stratus list` locally to see all available technique IDs.
+
+aws.initial-access.console-login-without-mfa
+aws.defense-evasion.cloudtrail-stop
+aws.execution.ec2-run-command
+aws.persistence.iam-create-access-key
+aws.persistence.iam-create-user
+aws.persistence.ec2-create-instance
+aws.discovery.ec2-get-console-output
+aws.discovery.ec2-describe-instances
+aws.defense-evasion.cloudtrail-lifecycle-rule
+aws.discovery.iam-get-account-summary
+aws.credential-access.secretsmanager-get-secret-value
+aws.lateral-movement.ec2-ssm-start-session
+aws.privilege-escalation.iam-attach-user-policy
+aws.credential-access.codecommit-get-repository
+aws.impact.ec2-monero-miner
+
