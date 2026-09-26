@@ -1,0 +1,224 @@
+name: EKS Red Team
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_instance_type:
+        description: 'EC2 instance type for the EKS node group'
+        required: true
+        type: string
+        default: 't3.medium'
+      run_techniques:
+        description: 'Run the Stratus attack techniques (set to no for a dry-run infra check only)'
+        required: true
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+      teardown_after:
+        description: 'Delete the cluster and node group after the run'
+        required: true
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+        default: 'yes'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ROLE_ARN: arn:aws:iam::560120514170:role/stratus-red-team-lab
+  CLUSTER_NAME: eks-red-team-lab
+  NODEGROUP_NAME: eks-red-team-nodes
+  CLUSTER_ROLE_NAME: eks-red-team-cluster-role
+  NODE_ROLE_NAME: eks-red-team-node-role
+
+jobs:
+  eks-lab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (for techniques file)
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure cluster and node IAM roles exist
+        run: |
+          set -euo pipefail
+
+          if ! aws iam get-role --role-name "$CLUSTER_ROLE_NAME" >/dev/null 2>&1; then
+            aws iam create-role \
+              --role-name "$CLUSTER_ROLE_NAME" \
+              --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+            aws iam attach-role-policy \
+              --role-name "$CLUSTER_ROLE_NAME" \
+              --policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+          fi
+
+          if ! aws iam get-role --role-name "$NODE_ROLE_NAME" >/dev/null 2>&1; then
+            aws iam create-role \
+              --role-name "$NODE_ROLE_NAME" \
+              --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+            aws iam attach-role-policy --role-name "$NODE_ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+            aws iam attach-role-policy --role-name "$NODE_ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+            aws iam attach-role-policy --role-name "$NODE_ROLE_NAME" --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+            echo "Waiting for IAM propagation..."
+            sleep 20
+          fi
+
+      - name: Create EKS cluster
+        id: cluster
+        run: |
+          set -euo pipefail
+
+          if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+            echo "Cluster $CLUSTER_NAME already exists, reusing it."
+            exit 0
+          fi
+
+          # EKS requires subnets in at least 2 AZs.
+          SUBNET_IDS=$(aws ec2 describe-subnets \
+            --filters "Name=default-for-az,Values=true" \
+            --query 'Subnets[].SubnetId' --output text | tr '\t' ',')
+
+          CLUSTER_ROLE_ARN=$(aws iam get-role --role-name "$CLUSTER_ROLE_NAME" --query 'Role.Arn' --output text)
+
+          aws eks create-cluster \
+            --name "$CLUSTER_NAME" \
+            --role-arn "$CLUSTER_ROLE_ARN" \
+            --resources-vpc-config "subnetIds=$SUBNET_IDS" \
+            --access-config authenticationMode=API_AND_CONFIG_MAP,bootstrapClusterCreatorAdminPermissions=true
+
+      - name: Wait for cluster to become active
+        run: |
+          set -euo pipefail
+          # Not using `aws eks wait cluster-active` - its default is 40
+          # attempts x 30s (20 min), and cluster creation has been observed
+          # to occasionally exceed that. Polling manually with more headroom.
+          for i in $(seq 1 80); do
+            STATUS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.status' --output text)
+            echo "Attempt $i: cluster status=$STATUS"
+            if [ "$STATUS" = "ACTIVE" ] || [ "$STATUS" = "FAILED" ]; then break; fi
+            sleep 30
+          done
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "Cluster did not become active (last status: $STATUS)." >&2
+            exit 1
+          fi
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Create node group
+        run: |
+          set -euo pipefail
+
+          if aws eks describe-nodegroup --cluster-name "$CLUSTER_NAME" --nodegroup-name "$NODEGROUP_NAME" >/dev/null 2>&1; then
+            echo "Node group $NODEGROUP_NAME already exists, reusing it."
+            exit 0
+          fi
+
+          SUBNET_IDS=$(aws ec2 describe-subnets \
+            --filters "Name=default-for-az,Values=true" \
+            --query 'Subnets[].SubnetId' --output text)
+
+          NODE_ROLE_ARN=$(aws iam get-role --role-name "$NODE_ROLE_NAME" --query 'Role.Arn' --output text)
+
+          aws eks create-nodegroup \
+            --cluster-name "$CLUSTER_NAME" \
+            --nodegroup-name "$NODEGROUP_NAME" \
+            --node-role "$NODE_ROLE_ARN" \
+            --subnets $SUBNET_IDS \
+            --instance-types "${{ inputs.node_instance_type }}" \
+            --ami-type AL2023_x86_64_STANDARD \
+            --scaling-config minSize=1,maxSize=1,desiredSize=1
+
+      - name: Wait for node group to become active
+        run: |
+          set -euo pipefail
+          # Default waiter is 80 attempts x 30s (40 min), which is already
+          # generous, but polling manually for consistency with the rest of
+          # this pipeline and to surface progress in the logs.
+          for i in $(seq 1 90); do
+            STATUS=$(aws eks describe-nodegroup --cluster-name "$CLUSTER_NAME" --nodegroup-name "$NODEGROUP_NAME" \
+              --query 'nodegroup.status' --output text)
+            echo "Attempt $i: nodegroup status=$STATUS"
+            if [ "$STATUS" = "ACTIVE" ] || [ "$STATUS" = "CREATE_FAILED" ]; then break; fi
+            sleep 30
+          done
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "Node group did not become active (last status: $STATUS)." >&2
+            exit 1
+          fi
+
+      - name: Confirm nodes are visible to Kubernetes
+        run: kubectl get nodes -o wide
+
+      - name: Confirm cluster-admin RBAC access (dry-run check)
+        run: |
+          echo "Checking whether the OIDC role has cluster-admin RBAC inside Kubernetes..."
+          kubectl auth can-i '*' '*' --all-namespaces
+          echo "If that printed 'yes', both the AWS IAM layer and the in-cluster RBAC layer are confirmed working."
+
+      - name: Install Stratus Red Team
+        if: inputs.run_techniques == 'yes'
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/stratus.tar.gz \
+            "https://github.com/DataDog/stratus-red-team/releases/latest/download/stratus-red-team_Linux_x86_64.tar.gz"
+          tar xzf /tmp/stratus.tar.gz -C /tmp stratus
+          sudo mv /tmp/stratus /usr/local/bin/stratus
+          stratus version
+
+      - name: Run EKS/Kubernetes techniques from file
+        if: inputs.run_techniques == 'yes'
+        run: |
+          set -euo pipefail
+
+          if [ ! -f eks-techniques.txt ]; then
+            echo "eks-techniques.txt not found in repo root" >&2
+            exit 1
+          fi
+
+          TECHNIQUES=$(grep -v '^\s*#' eks-techniques.txt | grep -v '^\s*$')
+
+          for TECH in $TECHNIQUES; do
+            echo "=== $TECH ==="
+            stratus warmup "$TECH"
+            stratus detonate "$TECH"
+            stratus cleanup "$TECH"
+          done
+
+      - name: Delete node group
+        if: always() && inputs.teardown_after == 'yes'
+        run: |
+          aws eks delete-nodegroup --cluster-name "$CLUSTER_NAME" --nodegroup-name "$NODEGROUP_NAME" || true
+          echo "Waiting for node group deletion..."
+          for i in $(seq 1 60); do
+            if ! aws eks describe-nodegroup --cluster-name "$CLUSTER_NAME" --nodegroup-name "$NODEGROUP_NAME" >/dev/null 2>&1; then
+              echo "Node group deleted."
+              break
+            fi
+            sleep 30
+          done
+
+      - name: Delete cluster
+        if: always() && inputs.teardown_after == 'yes'
+        run: |
+          aws eks delete-cluster --name "$CLUSTER_NAME" || true
+          echo "Waiting for cluster deletion..."
+          for i in $(seq 1 40); do
+            if ! aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+              echo "Cluster deleted."
+              break
+            fi
+            sleep 30
+          done
