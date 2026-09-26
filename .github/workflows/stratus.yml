@@ -1,0 +1,54 @@
+name: Stratus Red Team
+
+on:
+  workflow_dispatch:
+    inputs:
+      technique:
+        description: 'Attack technique to run (or "all")'
+        required: true
+        type: choice
+        default: 'all'
+        options:
+          - all
+          - aws.defense-evasion.cloudtrail-stop
+          - aws.defense-evasion.cloudtrail-delete
+          - aws.credential-access.ec2-steal-instance-credentials
+          - aws.credential-access.secretsmanager-retrieve-secrets
+          - aws.persistence.iam-backdoor-role
+          - aws.exfiltration.s3-backdoor-bucket-policy
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  stratus:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::560120514170:user/stratus
+          aws-region: us-east-1
+
+      - name: Install Stratus Red Team
+        run: |
+          brew tap datadog/stratus-red-team https://github.com/DataDog/stratus-red-team
+          brew install datadog/stratus-red-team/stratus-red-team
+
+      - name: Warm up, detonate, and clean up
+        run: |
+          set -euo pipefail
+
+          if [ "${{ inputs.technique }}" = "all" ]; then
+            TECHNIQUES=$(stratus list | grep 'aws\.' | awk '{print $2}')
+          else
+            TECHNIQUES="${{ inputs.technique }}"
+          fi
+
+          for t in $TECHNIQUES; do
+            echo "=== $t ==="
+            stratus warmup "$t"
+            stratus detonate "$t"
+            stratus cleanup "$t"
+          done
