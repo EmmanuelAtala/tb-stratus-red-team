@@ -1,17 +1,22 @@
 # One technique ID per line. Lines starting with # and blank lines are ignored.
 # Verified current as of the official Stratus Red Team docs (stratus-red-team.cloud/attack-techniques/EKS/
 # and .../kubernetes/). Run `stratus list --platform eks` / `--platform k8s` to check for new additions.
-
+ 
 # --- EKS-specific (control plane, via AWS API) ---
 eks.persistence.backdoor-aws-auth-configmap
 eks.lateral-movement.create-access-entry
-
+ 
 # --- Generic Kubernetes (in-cluster, works against any k8s cluster including EKS) ---
 k8s.credential-access.dump-secrets
 k8s.credential-access.steal-serviceaccount-token
-k8s.persistence.create-admin-clusterrole
+# k8s.persistence.create-admin-clusterrole - REMOVED: this technique waits
+# for Kubernetes to auto-generate a ServiceAccount token Secret, which was
+# removed by default in Kubernetes 1.24+ (LegacyServiceAccountTokenNoAutoGeneration).
+# It will time out on any current-generation cluster, EKS included. Not a
+# transient failure - retrying does not help.
 k8s.persistence.create-client-certificate
 k8s.persistence.create-token
 k8s.privilege-escalation.hostpath-volume
 k8s.privilege-escalation.nodes-proxy
 k8s.privilege-escalation.privileged-pod
+ 
