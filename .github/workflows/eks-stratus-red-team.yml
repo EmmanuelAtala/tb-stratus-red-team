@@ -171,6 +171,31 @@ jobs:
           kubectl auth can-i '*' '*' --all-namespaces
           echo "If that printed 'yes', both the AWS IAM layer and the in-cluster RBAC layer are confirmed working."
 
+      # ============================================================
+      # CUSTOMIZE: cdr-daemonset.yaml is a structural placeholder.
+      # Replace its image/env/volumes with your actual CDR vendor's
+      # published manifest before this step does anything meaningful.
+      # If your vendor ships a Helm chart instead, swap this step for
+      # `helm install` (setup-helm action + helm repo add/install).
+      # If you store an install token as a repo secret, create the
+      # Kubernetes Secret it references before applying the DaemonSet:
+      #   kubectl create secret generic cdr-agent-token \
+      #     --from-literal=token="$CDR_INSTALL_TOKEN" -n cdr-agent
+      # (create the cdr-agent namespace first, or apply the manifest's
+      # Namespace object before the Secret.)
+      # ============================================================
+      - name: Deploy CDR agent DaemonSet
+        run: |
+          set -euo pipefail
+          if [ ! -f cdr-daemonset.yaml ]; then
+            echo "cdr-daemonset.yaml not found in repo root - skipping CDR agent deployment." >&2
+            exit 1
+          fi
+          kubectl apply -f cdr-daemonset.yaml
+          echo "Waiting for CDR agent DaemonSet rollout..."
+          kubectl rollout status daemonset/cdr-agent -n cdr-agent --timeout=180s
+          kubectl get pods -n cdr-agent -o wide
+
       - name: Install Stratus Red Team
         if: inputs.run_techniques == 'yes'
         run: |
@@ -193,12 +218,34 @@ jobs:
 
           TECHNIQUES=$(grep -v '^\s*#' eks-techniques.txt | grep -v '^\s*$')
 
+          FAILED_TECHNIQUES=""
+
           for TECH in $TECHNIQUES; do
             echo "=== $TECH ==="
             stratus warmup "$TECH"
-            stratus detonate "$TECH"
+
+            DETONATE_OK=false
+            for attempt in 1 2 3; do
+              if stratus detonate "$TECH"; then
+                DETONATE_OK=true
+                break
+              fi
+              echo "Detonate attempt $attempt failed for $TECH - possible IAM propagation delay for a just-created role. Waiting 15s before retry..."
+              sleep 15
+            done
+
             stratus cleanup "$TECH"
+
+            if [ "$DETONATE_OK" != "true" ]; then
+              echo "WARNING: $TECH failed after retries" >&2
+              FAILED_TECHNIQUES="$FAILED_TECHNIQUES $TECH"
+            fi
           done
+
+          if [ -n "$FAILED_TECHNIQUES" ]; then
+            echo "The following techniques failed after retries:$FAILED_TECHNIQUES" >&2
+            exit 1
+          fi
 
       - name: Delete node group
         if: always() && inputs.teardown_after == 'yes'
