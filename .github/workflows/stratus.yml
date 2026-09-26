@@ -7,16 +7,9 @@ on:
         description: 'Attack technique to run (or "all")'
         required: true
         type: choice
-        default: 'all'
+        default: 'from-file'
         options:
-          - all
           - from-file
-          - aws.defense-evasion.cloudtrail-stop
-          - aws.defense-evasion.cloudtrail-delete
-          - aws.credential-access.ec2-steal-instance-credentials
-          - aws.credential-access.secretsmanager-retrieve-secrets
-          - aws.persistence.iam-backdoor-role
-          - aws.exfiltration.s3-backdoor-bucket-policy
 
 permissions:
   id-token: write
