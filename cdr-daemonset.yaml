@@ -1,0 +1,58 @@
+# ============================================================
+# CUSTOMIZE THIS FILE: replace the image, env vars, and volume
+# mounts with your actual CDR vendor's published DaemonSet spec.
+# Most vendors publish either a raw manifest like this or a Helm
+# chart - check your vendor's own Kubernetes/EKS install docs.
+#
+# This placeholder is structurally representative (privileged,
+# hostPath mounts, runs on every node) but the image and config
+# are illustrative only - it will not actually install anything
+# real as written.
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cdr-agent
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cdr-agent
+  namespace: cdr-agent
+spec:
+  selector:
+    matchLabels:
+      app: cdr-agent
+  template:
+    metadata:
+      labels:
+        app: cdr-agent
+    spec:
+      hostPID: true
+      hostNetwork: true
+      containers:
+        - name: cdr-agent
+          image: your-cdr-vendor.example.com/agent:latest
+          securityContext:
+            privileged: true
+          env:
+            - name: CDR_INSTALL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cdr-agent-token
+                  key: token
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+            - name: host-var-run
+              mountPath: /var/run
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+        - name: host-var-run
+          hostPath:
+            path: /var/run
+      tolerations:
+        - operator: Exists
