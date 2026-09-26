@@ -231,8 +231,12 @@ jobs:
                 DETONATE_OK=true
                 break
               fi
-              echo "Detonate attempt $attempt failed for $TECH - possible IAM propagation delay for a just-created role. Waiting 15s before retry..."
-              sleep 15
+              echo "Detonate attempt $attempt failed for $TECH. This may be a transient issue (e.g. IAM propagation delay) or a genuine incompatibility with this cluster - retries won't help the latter."
+              if [ "$attempt" -lt 3 ]; then
+                echo "Force-cleaning up before retry, since a partially-failed detonate can leave state that blocks a clean retry..."
+                stratus cleanup "$TECH" --force || true
+                sleep 15
+              fi
             done
 
             stratus cleanup "$TECH"
