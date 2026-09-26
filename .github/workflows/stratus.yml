@@ -28,7 +28,7 @@ jobs:
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::560120514170:user/stratus
+          role-to-assume: arn:aws:iam::560120514170:role/stratus-red-team-lab
           aws-region: us-east-1
 
       - name: Install Stratus Red Team
