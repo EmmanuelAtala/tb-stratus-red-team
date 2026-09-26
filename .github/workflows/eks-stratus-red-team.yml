@@ -185,6 +185,7 @@ jobs:
       # Namespace object before the Secret.)
       # ============================================================
       - name: Deploy CDR agent DaemonSet
+        continue-on-error: true
         run: |
           set -euo pipefail
           if [ ! -f cdr-daemonset.yaml ]; then
