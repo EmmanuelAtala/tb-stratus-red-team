@@ -225,6 +225,11 @@ jobs:
             echo "=== $TECH ==="
             stratus warmup "$TECH"
 
+            if [ "$TECH" = "eks.lateral-movement.create-access-entry" ]; then
+              echo "Waiting 60s after warmup before detonating - this technique's IAM role has consistently failed with 'invalid principal' on the first few attempts, possibly due to IAM propagation delay for its account-level trust policy."
+              sleep 60
+            fi
+
             DETONATE_OK=false
             for attempt in 1 2 3; do
               if stratus detonate "$TECH"; then
